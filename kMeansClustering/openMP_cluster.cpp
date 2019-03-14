@@ -1,5 +1,5 @@
-
-#include "openMP_cluster_header.h"
+#include "openMP_cluster.h"
+#include "openMP_general.h"
 #include <omp.h>
 #include <stdlib.h>
 
@@ -12,15 +12,13 @@ static void calc_helper_diameter(clusterHelper_t *helper, point_t *points);
 
 static double calcClusterQM(cluster_t *clusters, int clusterAt);
 
-
-static void calcPragmaRange(int count, int *threadWorking, int *range, int *id, int *start, int *end);
-
 void openMP_add_to_each_point_its_nearest_cluster(cluster_t *clusters, int k, point_t *points, int pointsCount)
 {
+
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(pointsCount, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(pointsCount, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
@@ -37,6 +35,7 @@ static void openMpaddToEachPointItsNearestCluster(point_t *point, cluster_t *clu
 	double currentDistance;
 	vector_t *currentClusterCenter;
 
+	int belongToo;
 	int i;
 	for (i = 0; i < clusterCount; i++)
 	{
@@ -46,9 +45,10 @@ static void openMpaddToEachPointItsNearestCluster(point_t *point, cluster_t *clu
 		{
 			minDistance = currentDistance;
 			nearestCluster = &(clusters[i]);
+			belongToo = i;
 		}
 	}
-	point->clusterBelongTo = nearestCluster->id;
+	point->clusterBelongTo = belongToo;
 }
 
 void openMP_add_to_each_clusterHelper_its_points(clusterHelper_t *helpers, int k, point_t *pointsWorkLoad, int pointCount)
@@ -56,7 +56,7 @@ void openMP_add_to_each_clusterHelper_its_points(clusterHelper_t *helpers, int k
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(k, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(k, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
@@ -86,13 +86,13 @@ void openMP_reset_clusterHelpers(clusterHelper_t *clusterHelpers, int clusterHel
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(clusterHelperCount, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(clusterHelperCount, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
 			clusterHelpers[i].numOfPoints = 0;
 			clusterHelpers[i].sumPointLocation = { 0,0,0 };
-			clusterHelpers[i].maxDistancePoint = 0; //TODO maybe i dont need this
+			clusterHelpers[i].diameter = 0;
 		}
 	}
 }
@@ -102,7 +102,7 @@ void openMP_calc_clusterHelpers_points_location_sum(clusterHelper_t *helpers, in
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(helpersCount, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(helpersCount, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
@@ -132,17 +132,13 @@ int openMP_is_center_changes(cluster_t *clusters, clusterHelper_t *helpers, int 
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(k, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(k, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
 			if (updateCenter(&(clusters[i]), &(helpers[i])))
 			{
-				//TODO maybe put double check locking although it looks unessential
-				#pragma omp critical
-				{
-					anyChange = 1;
-				}
+				anyChange = 1;		
 			}
 		}
 	}
@@ -163,11 +159,12 @@ static int updateCenter(cluster_t *cluster, clusterHelper_t *helper)
 
 void openMP_calc_clusterHelpers_diamaters(clusterHelper_t *helpers, int helpersCount, point_t *allPoints)
 {
+	
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
 		clusterHelper_t *currentHelper;
-		calcPragmaRange(helpersCount, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(helpersCount, &threadWorking, &range, &id, &start, &end);
 		int i;
 		for (i = start; i < end; i++)
 		{
@@ -201,18 +198,19 @@ static void calc_helper_diameter(clusterHelper_t *helper, point_t *points)
 			}
 		}
 	}
-	helper->maxDistancePoint = diameter;
+	helper->diameter = diameter;
 }
 
 double openMP_calc_QM(cluster_t *clusters, int clustersCount)
 {
 	int threadsNumber = omp_get_max_threads();
 	double *qResults = (double*)calloc(threadsNumber, sizeof(double));
+	
 
 	#pragma omp parallel
 	{
 		int threadWorking, range, id, start, end;
-		calcPragmaRange(clustersCount, &threadWorking, &range, &id, &start, &end);
+		openMP_calc_pragma_range(clustersCount, &threadWorking, &range, &id, &start, &end);
 		
 		int i;
 		for (i = start; i < end; i++)
@@ -220,7 +218,6 @@ double openMP_calc_QM(cluster_t *clusters, int clustersCount)
 			qResults[id] += calcClusterQM(clusters, i);
 		}
 	}
-
 	
 	double q = 0;
 	int i;
@@ -228,45 +225,34 @@ double openMP_calc_QM(cluster_t *clusters, int clustersCount)
 	{	
 		q += qResults[i];
 	}
-
-
 	free(qResults);
+	q /= clustersCount * (clustersCount - 1);
+
+
 	return q;
 
 }
 
-static double calcClusterQM(cluster_t *clusters, int clusterAt)
+static double calcClusterQM(cluster_t *clusters, int clusterPosCalc)
 {
+	double clusterPosCalcDiameter = clusters[clusterPosCalc].diameter;
+	vector_t *clusterPosCalcCenter = &(clusters[clusterPosCalc].center);
+
+	double currentDiameter;
+	vector_t *currentCenter;
+	double currentClustersDistance;
+
 	double qm = 0;
-
-	cluster_t *clusterCalc = &(clusters[clusterAt]);
-	double diameter = clusterCalc->maxDistancePoint;
-	vector_t *v1 = &(clusterCalc->center);
-
-	vector_t *v2;
-
 	int i;
-	for (i = 0; i < clusterAt; i++)
+	for (i = 0; i < clusterPosCalc; i++)
 	{
-		if (i != clusterAt)
-		{
-			v2 = &(clusters[i].center);
-			qm += diameter / vector_get_distance(v1, v2);
-		}
+		currentDiameter = clusters[i].diameter;
+		currentCenter = &(clusters[i].center);
+		currentClustersDistance = vector_get_distance(clusterPosCalcCenter, currentCenter);
+
+		qm += (clusterPosCalcDiameter + currentDiameter) / currentClustersDistance;
 	}
 	return qm;
 }
 
 
-static void calcPragmaRange(int count, int *threadWorking, int *range, int *id, int *start, int *end)
-{
-	*threadWorking = omp_get_num_threads();
-	*range = count / *threadWorking;
-	*id = omp_get_thread_num();
-	*start = (*id) * (*range);
-	*end = *start + *range;
-	if (*id == *threadWorking - 1) // last thread
-	{
-		*end += (count - *end); // add remainder
-	}
-}

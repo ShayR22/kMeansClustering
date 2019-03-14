@@ -1,9 +1,8 @@
 
-#include "vector_header.h"
+#include "vector.h"
 #include <math.h>
 #include <stdio.h>
 
-#define DOUBLE_EPSILON_PRECISION 0.0001
 
 double vector_get_distance(vector_t *v1, vector_t *v2)
 {
@@ -49,8 +48,6 @@ int vector_is_equal(vector_t *v1, vector_t *v2)
 	}
 	return 1;
 }
-
-
 
 void vector_print_vector(vector_t *vector)
 {

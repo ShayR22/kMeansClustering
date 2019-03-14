@@ -1,37 +1,35 @@
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "rwFileHeader.h"
-#include "cluster_header.h"
-#include "point_header.h"
-#include "vector_header.h"
-#include <omp.h>
+#include "rwFile.h"
+#include "cluster.h"
+#include "point.h"
+#include "vector.h"
 #include <stdio.h>
 #include <stdlib.h>
-
-
-#define INIT_LINE_SIZE_BYTES (3*sizeof(int) + 3*sizeof(double))
+#include <string.h>
 
 static void readPoints(FILE *file, point_t *points, int numPoints);
 static void readPoint(FILE *file, point_t *p);
 
+static void write_vector(FILE *openFile, vector_t *vec);
+static void writeClusterCenters(FILE *openFile, cluster_t *clusters, int clustersCount);
 
 void file_read_file(cluster_t  **emptyClusters, int *k, point_t **emptyPoints, int *pointsCount,
 			  double *T, double *dt, int *LIMIT, double *QM, char* fileName)
 {
 	// The first line of the file contains   N    K    T   dT   LIMIT   QM.
 	// Next lines are Initial Positions and Velocities of the points(xi, yi, zi, vxi, vyi, vzi)
-	FILE *file;
-	file = fopen(fileName, "r");
-	if (!file)
+	FILE *inputFile;
+	inputFile = fopen(fileName, "r");
+	if (!inputFile)
 	{
 		printf("file open failed\n");
+		fflush(stdout);
 	}
-	fscanf(file, "%d %d %lf %lf %d %lf", pointsCount, k, T, dt, LIMIT, QM);
-
-
+	fscanf(inputFile, "%d %d %lf %lf %d %lf", pointsCount, k, T, dt, LIMIT, QM);
 
 	*emptyPoints = (point_t*)calloc(*pointsCount, sizeof(point_t));
-	readPoints(file, *emptyPoints, *pointsCount);
+	readPoints(inputFile, *emptyPoints, *pointsCount);
 
 	*emptyClusters = (cluster_t*)calloc(*k, sizeof(cluster_t));
 	cluster_t *clusters = *emptyClusters;
@@ -40,64 +38,18 @@ void file_read_file(cluster_t  **emptyClusters, int *k, point_t **emptyPoints, i
 	{
 		cluster_init(&(clusters[i]), &((*emptyPoints)[i].location));
 	}
+
+	fclose(inputFile);
 }
 
 static void readPoints(FILE *file, point_t *points, int numPoints)
 {
-	//regular read
 	int i;
 	for (i = 0; i < numPoints; i++)
 	{
 		readPoint(file, &(points[i]));
 		points[i].id = i;
 	}
-
-	
-	//TODO maybe fix parallel reading
-	//point_t *pointsss = (point_t*)calloc(numPoints, sizeof(point_t));
-	//#pragma omp parallel
-	//{
-	//	//compute start location and endlocation and read points 
-	//	// start location is seek location in the file
-	//	int threadsUsed = omp_get_num_threads();
-	//	int numPointsToRead = numPoints / threadsUsed;
-	//	int id = omp_get_thread_num();
-	//	int start = id * numPointsToRead;
-	//	int end = start + numPointsToRead;
-	//	if (id == threadsUsed - 1) // last thread
-	//	{
-	//		end += (numPoints - end);
-	//	}	
-	//	printf("id is: %d, start is: %d, end is %d \n", id, start, end);
-	//	fflush(stdout);
-
-	//	int i;
-	//	fseek(file, start + INIT_LINE_SIZE_BYTES, SEEK_SET);
-	//	for (i = start; i < end; i++)
-	//	{
-	//		readPoint(file, &(pointsss[i]));
-	//		pointsss[i].id = i;
-	//	}
-	//}
-	//int emptyPointsCounter = 0;
-
-	//for (i = 0; i < numPoints; i++)
-	//{
-	////	printPoint(&(pointsss[i]));
-	//	if (pointsss[i].location.axis[0] == 0 && pointsss[i].location.axis[1] == 0 && pointsss[i].location.axis[2] == 0)
-	//	{
-	//		emptyPointsCounter++;
-	//	}
-	//}
-	////check if the same points have been read
-	//for (i = 0; i < numPoints; i++)
-	//{
-	//	if (!isVectorEqual(&(points[i].location), &(pointsss[i].location)))
-	//	{
-	//		printf("\nnot the same read\n");
-	//	}
-	//}
-	//printf("same points\n");
 }
 
 static void readPoint(FILE *file, point_t *p)
@@ -109,27 +61,57 @@ static void readPoint(FILE *file, point_t *p)
 	fscanf(file, "%lf %lf %lf", &(s->axis[0]), &(s->axis[1]), &(s->axis[2]));
 }
 
-void file_write_kMeans(cluster_t *clusters, int k, double time, double q)
+void file_write_kMeans_success(char *fileName, cluster_t *clusters, int k, double time, double q)
 {
 	FILE *output;
-	output = fopen(FILE_NAME_WRITE, "w");
+	output = fopen(fileName, "w");
 	if (!output)
 	{
 		printf("error on opening input\n");
 	}
 
-	fprintf(output, "%s %lf %s %lf \n", FILE_NAME_FORMAT_T, time, FILE_NAME_FORMAT_Q, q);
+	fprintf(output, "%s %lf %s %lf \n", FILE_NAME_FORMAT_T_SUCCESS, time, FILE_NAME_FORMAT_Q_SUCCESS, q);
 	fprintf(output, "%s \n", FILE_NAME_FORMAT_CLUSTER);
 	
+	writeClusterCenters(output, clusters, k);
+	
+	fclose(output);
+}
+
+void file_write_kMeans_fail(char *fileName, cluster_t *clusters, int k, double time, double q)
+{
+	FILE *output;
+	output = fopen(fileName, "w");
+	if (!output)
+	{
+		printf("error on opening input\n");
+	}
+
+	fprintf(output, "%s %lf %s %lf \n", FILE_NAME_FORMAT_T_FAIL, time, FILE_NAME_FOMRAT_Q_FAIL, q);
+	fprintf(output, "%s \n", FILE_NAME_FORMAT_CLUSTER);
+
+	writeClusterCenters(output, clusters, k);
+	
+	fclose(output);
+}
+
+static void writeClusterCenters(FILE *openFile, cluster_t *clusters, int clustersCount)
+{
 	vector_t *currentCenter;
-	int i, j;
-	for (i = 0; i < k; i++)
+	int i;
+	for (i = 0; i < clustersCount; i++)
 	{
 		currentCenter = &(clusters[i].center);
-		for (j = 0; j < NUM_OF_ELEMENTS_IN_VECTOR; j++)
-		{
-			fprintf(output, "%lf ", currentCenter->axis[j]);
-		}
-		fprintf(output, "\n");
+		write_vector(openFile, currentCenter);
 	}
+}
+
+static void write_vector(FILE *openFile, vector_t *vec)
+{
+	int j;
+	for (j = 0; j < NUM_OF_ELEMENTS_IN_VECTOR; j++)
+	{
+		fprintf(openFile, "%lf ", vec->axis[j]);
+	}
+	fprintf(openFile, "\n");
 }

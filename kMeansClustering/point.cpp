@@ -1,51 +1,57 @@
-
-#include "point_header.h"
+#include "point.h"
+#include "openMP_general.h"
+#include "openMP_point.h"
+#include "cuda.h"
 #include <stdio.h>
 #include <mpi.h>
 #include <math.h>
 #include <stddef.h>
-
-static void incrementLocation(point_t *point, double deltaT);
-static void advancePointInDt(point_t *point, double deltaT);
-
-
-void point_incrementByDT(point_t *points, int pointsCount)
-{
-
-}
-
-
-void point_increment_location(point_t *points, int pointsCount, double deltaT)
-{
-	point_t *currentPoint;
-	int i;
-	for (i = 0; i < pointsCount; i++)
-	{
-		currentPoint = &(points[i]);
-		incrementLocation(currentPoint, deltaT);
-	}
-}
-
-static void incrementLocation(point_t *p, double deltaT)
-{
-	int i;
-	for (i = 0; i < NUM_OF_ELEMENTS_IN_VECTOR; i++)
-	{
-		p->location.axis[i] += p->speed.axis[i] * deltaT;
-	}
-}
-
+#include <omp.h>
 
 void point_advance_points_by_dt(point_t*points, int pointsCount, double deltaT)
 {
-	int i;
-	for (i = 0; i < pointsCount; i++)
+	double static cudaPointDevisionClusterToPoint = 0.9;
+	int numOfCudaPoints = (int)(pointsCount * cudaPointDevisionClusterToPoint);
+	if (numOfCudaPoints == 0)
 	{
-		advancePointInDt(&(points[i]), deltaT);
+		numOfCudaPoints++;
 	}
+	else if (numOfCudaPoints == pointsCount)
+	{
+		numOfCudaPoints--;
+	}
+	int numOfOpenMPpoints = pointsCount - numOfCudaPoints;
+	point_t *cudaPoints = points; // give a different name for easy understanding in later code
+	point_t *openMPpoints = &(points[numOfCudaPoints]);
+
+	double openMPTimeStart;
+	double openMPTimeEnd;
+	double cudaTimeStart;
+	double cudaTimeEnd;
+
+#pragma omp parallel sections
+	{
+		#pragma omp section
+		{
+			openMPTimeStart = MPI_Wtime();
+			openMP_advance_points_by_deltaT(openMPpoints, numOfOpenMPpoints, deltaT);
+			openMPTimeEnd = MPI_Wtime();
+		}
+		#pragma omp section
+		{
+			cudaTimeStart = MPI_Wtime();
+			if (!cuda_increment_points(cudaPoints, numOfCudaPoints, deltaT))
+			{
+				printf("CUDA FAILED in distributing to each point its cluster \n");
+				fflush(stdout);
+			}
+			cudaTimeEnd = MPI_Wtime();
+		}
+	}
+	openMP_calc_new_deviation_based_on_time(cudaTimeStart, cudaTimeEnd, openMPTimeStart, openMPTimeEnd, &cudaPointDevisionClusterToPoint);
 }
 
-static void advancePointInDt(point_t *point, double deltaT)
+void point_advance_point_by_dt(point_t *point, double deltaT)
 {
 	int i;
 	for (i = 0; i < NUM_OF_ELEMENTS_IN_VECTOR; i++)
@@ -65,6 +71,7 @@ double point_get_distance(point_t *p1, point_t *p2)
 }
 
 
+// ======================================= PRINTING METHODS ===========================================
 void point_print_points(point_t *points, int pointsCount)
 {
 	int i;
